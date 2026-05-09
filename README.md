@@ -5,29 +5,29 @@ A self-service platform for spinning up isolated temporary environments, deployi
 ---
 
 ## Architecture
+
+```
 +--------------------------------------------------+
-|              Linux VM (Single Host)              |
+|            Linux VM (Single Host)                |
 |                                                  |
-|  HTTP :80                                        |
-|  User ---------> [ Nginx Container ]             |
-|                        |                         |
-|              proxy_pass per env                  |
-|                        |                         |
-|         +--------------+--------------+          |
-|         |                             |          |
-|  [ net-env-abc / app-env-abc ]  [ net-env-xyz ]  |
-|  [ demo-app container        ]  [ demo-app    ]  |
-|  [ GET /   GET /health       ]  [ ...         ]  |
+|  User --HTTP:80--> [ Nginx Container ]           |
+|                           |                      |
+|              +------------+------------+         |
+|              |                         |         |
+|   [ net-env-abc / app-env-abc ]  [ net-env-xyz ] |
+|   [ demo-app:latest           ]  [ demo-app    ] |
+|   [ GET /    GET /health      ]                  |
 |                                                  |
-|  HTTP :8080                                      |
-|  User ---------> [ Flask API Container ]         |
-|                  wraps all bash scripts          |
+|  User --HTTP:8080--> [ Flask API Container ]     |
+|                      wraps all bash scripts      |
 |                                                  |
-|  [ Cleanup Daemon ]     [ Health Poller ]        |
-|  loops every 60s        loops every 30s          |
-|  destroys expired envs  marks degraded envs      |
+|  [ Cleanup Daemon ]    [ Health Poller ]         |
+|    every 60s               every 30s             |
+|    auto-destroys           marks degraded        |
 |                                                  |
 |  envs/*.json   logs/   nginx/conf.d/             |
++--------------------------------------------------+
+```
 
 ---
 
@@ -37,106 +37,57 @@ A self-service platform for spinning up isolated temporary environments, deployi
 - Docker Engine 24+
 - Docker Compose plugin (`docker compose`)
 - `jq`, `curl`, `make`
-- Port 80 and 8080 open in your cloud security group
+- Port 80 and 8080 open in security group
 
-Install missing tools:
 ```bash
 sudo apt-get update && sudo apt-get install -y jq curl make
 ```
 
 ---
 
-## Quick Start (zero to first running env in 5 commands)
+## Quick Start
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/devops-sandbox.git
+git clone https://github.com/asanteedith/devops-sandbox.git
 cd devops-sandbox
-
-# 2. Build the demo app image
 docker build -t demo-app:latest ./demo-app
-
-# 3. Copy and configure environment
 cp .env.example .env
-
-# 4. Start the platform
 make up
-
-# 5. Create your first environment
 make create
-```
-
-Your environment is live. Test it:
-```bash
-curl -H 'Host: <env-id>.localhost' http://localhost:80/
-curl -H 'Host: <env-id>.localhost' http://localhost:80/health
 ```
 
 ---
 
 ## Full Demo Walkthrough
 
-### 1. Start the platform
 ```bash
+# Start platform
 make up
-```
 
-### 2. Create an environment
-```bash
+# Create environment
 make create
-# Enter name: myapp
-# Enter TTL: 1800
-```
 
-### 3. Check health status
-```bash
+# Test it
+curl -H 'Host: <env-id>.localhost' http://localhost:80/
+curl -H 'Host: <env-id>.localhost' http://localhost:80/health
+
+# Check health
 make health
-```
 
-### 4. Tail logs
-```bash
-make logs ENV=env-myapp-XXXXX
-```
-
-### 5. Simulate an outage
-```bash
-# Crash the container
-make simulate ENV=env-myapp-XXXXX MODE=crash
-
-# Watch health poller detect it within 90s
-tail -f logs/poller.log
+# Simulate crash
+make simulate ENV=<env-id> MODE=crash
 
 # Recover
-make simulate ENV=env-myapp-XXXXX MODE=recover
-```
+make simulate ENV=<env-id> MODE=recover
 
-### 6. Use the Control API
-```bash
-# List all envs
-curl -s http://localhost:8080/envs | jq .
-
-# Create via API
-curl -s -X POST http://localhost:8080/envs \
-  -H "Content-Type: application/json" \
-  -d '{"name":"apienv","ttl":600}' | jq .
-
-# Trigger outage via API
-curl -s -X POST http://localhost:8080/envs/<env-id>/outage \
-  -H "Content-Type: application/json" \
-  -d '{"mode":"pause"}' | jq .
-
-# Destroy via API
-curl -s -X DELETE http://localhost:8080/envs/<env-id> | jq .
-```
-
-### 7. Watch auto-destroy (short TTL env)
-```bash
+# Auto-destroy demo
 bash platform/create_env.sh shortlived 70
 tail -f logs/cleanup.log
-```
 
-### 8. Tear everything down
-```bash
+# API
+curl -s http://localhost:8080/envs | jq .
+
+# Shut down
 make down
 ```
 
@@ -146,14 +97,14 @@ make down
 
 | Command | Description |
 |---|---|
-| `make up` | Start Nginx, API, cleanup daemon, health poller |
-| `make down` | Stop everything, destroy all envs |
-| `make create` | Create new env (prompts for name + TTL) |
+| `make up` | Start Nginx, API, daemon, poller |
+| `make down` | Stop everything |
+| `make create` | Create new env |
 | `make destroy ENV=<id>` | Destroy specific env |
-| `make logs ENV=<id>` | Tail env app logs |
-| `make health` | Show all env health statuses |
+| `make logs ENV=<id>` | Tail env logs |
+| `make health` | Show all env health |
 | `make simulate ENV=<id> MODE=<mode>` | Run outage simulation |
-| `make clean` | Wipe all state, logs, archives |
+| `make clean` | Wipe all state and logs |
 
 ---
 
@@ -161,47 +112,31 @@ make down
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/envs` | Create env `{"name":"x","ttl":1800}` |
-| GET | `/envs` | List active envs + TTL remaining |
+| POST | `/envs` | Create env |
+| GET | `/envs` | List envs + TTL |
 | DELETE | `/envs/:id` | Destroy env |
-| GET | `/envs/:id/logs` | Last 100 lines of app.log |
-| GET | `/envs/:id/health` | Last 10 health check results |
-| POST | `/envs/:id/outage` | Trigger simulation `{"mode":"crash"}` |
+| GET | `/envs/:id/logs` | Last 100 log lines |
+| GET | `/envs/:id/health` | Last 10 health checks |
+| POST | `/envs/:id/outage` | Trigger simulation |
 
 ---
 
-## Outage Simulation Modes
+## Outage Modes
 
-| Mode | Effect | Recovery |
-|---|---|---|
-| `crash` | docker kill — immediate SIGKILL | MODE=recover restarts container |
-| `pause` | docker pause — freezes all processes | MODE=recover unpauses |
-| `network` | Disconnects container from network | MODE=recover reconnects |
-| `recover` | Restores whatever was broken | — |
-| `stress` | CPU spike via stress-ng for 60s | Auto-recovers after 60s |
-
----
-
-## Log Shipping
-
-Uses Approach A: `docker logs -f $CONTAINER >> logs/$ENV_ID/app.log &`
-
-PID stored in `logs/$ENV_ID/log-shipper.pid` and killed on destroy to prevent zombie processes.
-
-```bash
-make logs ENV=<env-id>
-```
+| Mode | Effect |
+|---|---|
+| `crash` | Kills container immediately |
+| `pause` | Freezes all processes |
+| `network` | Disconnects from network |
+| `recover` | Restores whatever was broken |
+| `stress` | CPU spike for 60s |
 
 ---
 
 ## Known Limitations
 
-- Single VM only — not designed for multi-host deployments
-- Host-header routing — real DNS needed for browser access without -H flag
-- No API authentication — do not expose port 8080 publicly
-- Demo app only — custom apps need their own image builds
+- Single VM only
+- Host-header routing — real DNS needed for browser access
+- No API authentication
 - Flask dev server — use Gunicorn for production
-- No log rotation — long-running envs accumulate large log files
-# devops-sandbox
-# devops-sandbox
-# devops-sandbox
+- No log rotation
