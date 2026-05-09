@@ -202,3 +202,4 @@ make logs ENV=<env-id>
 - Demo app only — custom apps need their own image builds
 - Flask dev server — use Gunicorn for production
 - No log rotation — long-running envs accumulate large log files
+# devops-sandbox
